@@ -1,5 +1,5 @@
 const httpServer = require("http").createServer();
-const crypto = require("crypto");
+const crypto = require('node:crypto')
 const randomId = () => crypto.randomBytes(8).toString("hex");
 const PORT = process.env.PORT || 3000; // You can choose any port you like
 httpServer.listen(PORT, () => {
