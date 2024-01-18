@@ -1,7 +1,9 @@
 const httpServer = require("http").createServer();
 const crypto = require('node:crypto')
 const randomId = () => crypto.randomBytes(8).toString("hex");
-const PORT = process.env.PORT || 3000; // You can choose any port you like
+require('dotenv').config()
+
+const PORT = process.env.PORT;
 httpServer.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
@@ -61,41 +63,54 @@ io.on("connection", async (socket) => {
     });
 
     socket.on(EVENTS.CREATE_ROOM, async (createdBy) => {
-        console.log(createdBy);
-        const roomName = Math.random().toString(36).substring(7);
-        const room = {
-            _name: roomName,
-            _createdBy: createdBy,
-            _players: [createdBy],
-            _songs: [],
-            _started: false,
-        };
-        inMemoryStorage.rooms[roomName] = room;
+        try {
 
-        socket.join(roomName);
-        socket.emit(EVENTS.RESPONSE_CREATE_ROOM, room);
-        io.to(roomName).emit(EVENTS.NEW_PLAYER, room);
+            const roomName = Math.random().toString(36).substring(7);
+            const room = {
+                _name: roomName,
+                _createdBy: createdBy,
+                _players: [createdBy],
+                _songs: [],
+                _started: false,
+            };
+            inMemoryStorage.rooms[roomName] = room;
+
+            socket.join(roomName);
+            socket.emit(EVENTS.RESPONSE_CREATE_ROOM, room);
+            io.to(roomName).emit(EVENTS.NEW_PLAYER, room);
+
+        } catch (error) {
+            console.error(error);
+            return;
+        }
     });
 
     socket.on('join room', async (data) => {
-        const { roomName, player } = data;
-        const room = inMemoryStorage.rooms[roomName];
+        try {
 
-        if (!room) {
-            socket.emit("unable to join", "La room n'existe pas.");
+            const { roomName, player } = data;
+            const room = inMemoryStorage.rooms[roomName];
+
+            if (!room) {
+                socket.emit("unable to join", "La room n'existe pas.");
+                return;
+            }
+
+            if (room._started) {
+                socket.emit("unable to join", "La room a déjà démarré.");
+                return;
+            }
+
+            room._players.push(player);
+
+            socket.join(roomName);
+            socket.emit(EVENTS.RESPONSE_JOIN_ROOM, room);
+            io.to(roomName).emit("new player", room);
+
+        } catch (error) {
+            console.error(error);
             return;
         }
-
-        if (room._started) {
-            socket.emit("unable to join", "La room a déjà démarré.");
-            return;
-        }
-
-        room._players.push(player);
-
-        socket.join(roomName);
-        socket.emit(EVENTS.RESPONSE_JOIN_ROOM, room);
-        io.to(roomName).emit("new player", room);
     });
     socket.on(EVENTS.GET_ROOM_DATA, async (roomName) => {
         const room = inMemoryStorage.rooms[roomName];
