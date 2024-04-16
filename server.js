@@ -1,6 +1,7 @@
 const httpServer = require("http").createServer();
 const crypto = require('node:crypto')
 const randomId = () => crypto.randomBytes(8).toString("hex");
+const cors = require('cors');
 require('dotenv').config()
 
 const PORT = process.env.PORT;
@@ -12,11 +13,9 @@ const inMemoryStorage = {
     rooms: {},
 };
 
-const io = require("socket.io")(httpServer, {
-    cors: {
-        origin: "*",
-    },
-});
+const io = require("socket.io")(httpServer);
+io.use(cors());
+
 const EVENTS = {
     CREATE_ROOM: "create room",
     JOIN_ROOM: "join room",
