@@ -12,7 +12,7 @@ const inMemoryStorage = {
     rooms: {},
 };
 
-const io = require('socket.io')(server, {
+const io = require('socket.io')(httpServer, {
     cors: {
         origin: '*',
     }
