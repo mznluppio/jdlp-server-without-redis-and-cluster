@@ -12,8 +12,11 @@ const inMemoryStorage = {
     rooms: {},
 };
 
-const io = require("socket.io")(httpServer);
-
+const io = require("socket.io")(httpServer, {
+    cors: {
+        origin: "*",
+    },
+});
 const EVENTS = {
     CREATE_ROOM: "create room",
     JOIN_ROOM: "join room",
@@ -171,7 +174,6 @@ io.on("connection", async (socket) => {
     socket.on("disconnecting", async () => {
         const roomsArray = Array.from(socket.rooms);
         const roomName = roomsArray[1];
-
         if (roomName !== undefined) {
             socket.leave(roomName);
 
