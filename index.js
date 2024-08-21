@@ -1,74 +1,72 @@
-const httpServer = require("http").createServer();
-const crypto = require('node:crypto')
-const randomId = () => crypto.randomBytes(8).toString("hex");
-require('dotenv').config()
-
-const PORT = process.env.PORT;
-httpServer.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-});
-const inMemoryStorage = {
-    sessions: {},
-    rooms: {},
-};
-
-const io = require('socket.io')(httpServer, {
+const app = require('express')();
+const cors = require('cors');
+const http = require('http').Server(app);
+const io = require('socket.io')(http, {
     cors: {
         origin: '*',
     }
 });
+app.use(cors());
+
+const inMemoryStorage = {
+    rooms: {},
+};
+let connectedPlayers = [];
 
 const EVENTS = {
     CREATE_ROOM: "create room",
     JOIN_ROOM: "join room",
+    START_ROOM: "start room",
     RESPONSE_CREATE_ROOM: "response create room",
     RESPONSE_JOIN_ROOM: "response join room",
+    SEND_SONG: "send song",
+    WANT_NEXT_SONG: "want next song",
+    WANT_REVEAL_PLAYER: "want reveal player",
+    QUIT_ROOM: "quit room",
     NEW_PLAYER: "new player",
     GET_ROOM_DATA: "get room data",
     RESPONSE_GET_ROOM_DATA: "response get room data",
     ERROR: "error",
+    DISCONNECTING: "disconnecting"
 };
 
-io.use(async (socket, next) => {
-    const sessionID = socket.handshake.auth.sessionID;
-    if (sessionID) {
-        const session = inMemoryStorage.sessions[sessionID];
-        if (session) {
-            socket.sessionID = sessionID;
-            socket.userID = session.userID;
-            socket.username = session.username;
-            return next();
-        }
-    }
+io.on('connection', (socket) => {
 
-    const username = socket.handshake.auth.username;
-    const id = socket.handshake.auth.id;
-    if (!username) {
-        return next(new Error("invalid username"));
-    }
-
-    socket.sessionID = randomId();
-    socket.userID = id;
-    socket.username = username;
-    inMemoryStorage.sessions[socket.sessionID] = {
-        userID: socket.userID,
-        username: socket.username,
-        connected: true,
-    };
-
-    next();
-});
-
-io.on("connection", async (socket) => {
-    socket.emit("session", {
-        sessionID: socket.sessionID,
-        userID: socket.userID,
-        username: socket.username,
+    connectedPlayers.push({
+        ...socket.handshake.auth,
+        socketId: socket.id
     });
+    io.sockets.emit('update-connections', connectedPlayers);
+
+    socket.on("quit room", (data) => {
+        const { roomName } = data
+        socket.to(roomName).emit("player quit", socket.handshake.auth);
+    })
+
+    socket.on('disconnect', () => {
+        console.log("player disconnected")
+        connectedPlayers = connectedPlayers.filter((player) => player.id !== socket.handshake.auth.id);
+        io.sockets.emit('update-connections', connectedPlayers);
+
+
+    });
+    socket.on("disconnecting", (reason) => {
+        for (const room of socket.rooms) {
+            if (room !== socket.id) {
+                socket.leave(room)
+                const roomData = inMemoryStorage.rooms[room];
+                roomData._players = roomData._players.filter(
+                    (player) => player._id !== socket.handshake.auth.id
+                );
+                socket.to(room).emit("player disconnected", { room: roomData, player: socket.handshake.auth })
+                socket.to(room).emit("user has left", socket.handshake.auth);
+            }
+        }
+    });
+
 
     socket.on(EVENTS.CREATE_ROOM, async (createdBy) => {
         try {
-
             const roomName = Math.random().toString(36).substring(7);
             const room = {
                 _name: roomName,
@@ -89,11 +87,13 @@ io.on("connection", async (socket) => {
         }
     });
 
-    socket.on('join room', async (data) => {
+    socket.on(EVENTS.JOIN_ROOM, async (data) => {
         try {
 
             const { roomName, player } = data;
+
             const room = inMemoryStorage.rooms[roomName];
+
 
             if (!room) {
                 socket.emit("unable to join", "La room n'existe pas.");
@@ -109,13 +109,40 @@ io.on("connection", async (socket) => {
 
             socket.join(roomName);
             socket.emit(EVENTS.RESPONSE_JOIN_ROOM, room);
-            io.to(roomName).emit("new player", room);
+            setTimeout(() => {
+                io.to(roomName).emit("new player", room);
+            }, 1000);
 
         } catch (error) {
             console.error(error);
             return;
         }
     });
+
+
+    socket.on("invite friend", async (data) => {
+        try {
+            const { player, roomData } = data;
+            let friend = connectedPlayers.find((p) => p.id === player._id);
+            if (!friend) {
+                console.error("Friend not found");
+                return;
+            }
+            let socketFriend = io.sockets.sockets.get(friend.socketId);
+
+            io.in(roomData._name).allSockets().then((clients) => {
+
+                if (Array.from(clients).includes(socketFriend.id) === false) {
+                    io.to(friend.socketId).emit("response invite friend", { player, roomData });
+                }
+            });
+
+
+        } catch (error) {
+            console.error(error);
+        }
+    });
+
     socket.on(EVENTS.GET_ROOM_DATA, async (roomName) => {
         const room = inMemoryStorage.rooms[roomName];
         if (room) {
@@ -125,9 +152,8 @@ io.on("connection", async (socket) => {
         }
     });
 
-    socket.on("start room", async (data) => {
+    socket.on(EVENTS.START_ROOM, async (data) => {
         const { roomData, player } = data;
-        console.log(data)
         const room = inMemoryStorage.rooms[roomData._name];
 
         if (room && !room._started) {
@@ -138,7 +164,7 @@ io.on("connection", async (socket) => {
         }
     });
 
-    socket.on("send song", async (data) => {
+    socket.on(EVENTS.SEND_SONG, async (data) => {
         const { songs, roomData } = data;
         const room = inMemoryStorage.rooms[roomData._name];
         if (room) {
@@ -151,7 +177,7 @@ io.on("connection", async (socket) => {
         }
     });
 
-    socket.on("want next song", async (data) => {
+    socket.on(EVENTS.WANT_NEXT_SONG, async (data) => {
         const { player, roomData } = data;
         const room = inMemoryStorage.rooms[roomData._name];
         if (room) {
@@ -159,7 +185,7 @@ io.on("connection", async (socket) => {
         }
     });
 
-    socket.on("want reveal player", async (data) => {
+    socket.on(EVENTS.WANT_REVEAL_PLAYER, async (data) => {
         const { player, roomData } = data;
         const room = inMemoryStorage.rooms[roomData._name];
         if (room) {
@@ -167,25 +193,21 @@ io.on("connection", async (socket) => {
         }
     });
 
-    socket.on("quit room", async (roomData) => {
-        socket.leave(roomData._name);
-        socket.emit("response quit room");
-    });
 
-    socket.on("disconnecting", async () => {
+
+    socket.on(EVENTS.QUIT_ROOM, async () => {
         const roomsArray = Array.from(socket.rooms);
         const roomName = roomsArray[1];
         if (roomName !== undefined) {
-            socket.leave(roomName);
 
             const room = inMemoryStorage.rooms[roomName];
-
             if (room) {
                 room._players = room._players.filter(
-                    (player) => player.userID !== socket.userID
+                    (player) => player._id !== socket.handshake.auth.id
                 );
+                socket.leave(roomName);
 
-                io.to(roomName).emit('player disconnected', { room: room, player: socket.username });
+                io.to(roomName).emit('player disconnected', { room: room, player: socket.handshake.auth });
 
                 if (room._players.length === 1) {
                     io.to(roomName).emit("quit");
@@ -195,14 +217,16 @@ io.on("connection", async (socket) => {
         }
     });
 
-    socket.on("disconnect", async () => {
-        const matchingSockets = await io.in(socket.userID).allSockets();
-        const isDisconnected = matchingSockets.size === 0;
-        if (isDisconnected) {
-            socket.broadcast.emit("user disconnected", socket.userID);
-            inMemoryStorage.sessions[socket.sessionID].connected = false;
-        }
-    });
 });
 
 
+
+// Broadcast the current server time as global message, every 1s
+setInterval(() => {
+    io.sockets.emit('time-msg', { time: new Date().toISOString() });
+}, 1000);
+
+// Start the express server
+http.listen(3000, function () {
+    console.log('listening on *:3000');
+});
